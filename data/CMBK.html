@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:,">     <!--Prevent Error 500 because no favicon found. For this no icon needed-->
+    <title>CMBK</title>
+    <script type="text/javascript">
+        var ws = null;
+        var data = {
+            NAME        :"Empty",
+            WIFI_SSID   :"Empty",
+            WIFI_PW     :"Empty",
+            MQTT_IP     :"Empty",
+            MQTT_PORT   :"Empty",
+            MQTT_ID     :"Empty",
+            MQTT_PW     :"Empty"
+        };
+    </script>
+</head>
+<body>
+    <h2>
+        BK Credentials Manager
+    </h2>
+    <label>Controller Name (max 6):</label><br>
+    <input type="text" id="NAME" maxlength="6"><br>
+    <label>WiFi SSID:</label><br>
+    <input type="text" id="WIFI_SSID" maxlength="32"><br>
+    <label>WiFi PW:</label><br>
+    <input type="password" id="WIFI_PW" maxlength="64"><br>
+    <label>MQTT Broker IP (111.222.333.444):</label><br>
+    <input type="text" id="MQTT_IP" maxlength="15"><br>
+    <label>MQTT Broker Port (max 5):</label><br>
+    <input type="text" id="MQTT_PORT" maxlength="5"><br>
+    <label>MQTT Broker ID:</label><br>
+    <input type="text" id="MQTT_ID" maxlength="32"><br>
+    <label>MQTT Broker PW:</label><br>
+    <input type="password" id="MQTT_PW" maxlength="64"><br><br>
+    <button type="button" id="SUBMIT">Submit</button>
+    <p id="info">Waiting for submit</p>
+
+    <script>
+        document.getElementById("SUBMIT").onclick = function() {
+            if ((document.getElementById("NAME").value == "")
+            || (document.getElementById("WIFI_SSID").value == "")
+            || (document.getElementById("WIFI_PW").value == "")
+            || (document.getElementById("MQTT_IP").value == "")
+            || (document.getElementById("MQTT_PORT").value == "")
+            || (document.getElementById("MQTT_ID").value == "")
+            || (document.getElementById("MQTT_PW").value == "")) {
+                alert("All credentials must be filled out");
+                return;
+            }
+            document.getElementById("SUBMIT").disabled = true;
+            ws = new WebSocket("ws://" + location.host + "/paraex");
+            ws.onopen = function(){
+                data.NAME       = document.getElementById("NAME").value;
+                data.WIFI_SSID  = document.getElementById("WIFI_SSID").value;
+                data.WIFI_PW    = document.getElementById("WIFI_PW").value;
+                data.MQTT_IP    = document.getElementById("MQTT_IP").value;
+                data.MQTT_PORT  = document.getElementById("MQTT_PORT").value;
+                data.MQTT_ID    = document.getElementById("MQTT_ID").value;
+                data.MQTT_PW    = document.getElementById("MQTT_PW").value;
+                ws.send(JSON.stringify(data));
+            };
+            ws.onmessage = function(event){
+                console.log(event);
+                if (event.data == "ok") {
+                    ws.close();
+                    document.getElementById("info").innerText = "Valid data. Controller will restart in 5s.";
+                    document.getElementById("SUBMIT").disabled = false;
+                }else if (event.data == "wifi") {
+                    document.getElementById("info").innerText = "Invalid data. Wifi: not found or credentials are invalid!";
+                    document.getElementById("SUBMIT").disabled = false;
+                }else if (event.data == "mqtt") {
+                    document.getElementById("info").innerText = "Invalid data. MQTT: broker not found or credentials are invalid!";
+                    document.getElementById("SUBMIT").disabled = false;
+                }else if (event.data == "to") {
+                    window.alert("Connection timeout");
+                    document.getElementById("SUBMIT").disabled = false;
+                }else {
+                    document.getElementById("info").innerText = event.data;
+                }
+            };
+        }
+    </script>
+</body>
+</html>

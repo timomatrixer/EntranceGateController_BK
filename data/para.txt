@@ -1,0 +1,9 @@
+{
+    NAME        :"Empty",
+    WIFI_SSID   :"Empty",
+    WIFI_PW     :"Empty",
+    MQTT_IP     :"Empty",
+    MQTT_PORT   :"Empty",
+    MQTT_ID     :"Empty",
+    MQTT_PW     :"Empty"
+}
