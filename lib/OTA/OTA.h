@@ -13,7 +13,7 @@ void ota_handle( void * parameter ) {
 }
 #endif
 
-void setupOTA(const char* nameprefix, const char* ssid, const char* password) {
+void setupOTA(const char* nameprefix/*, const char* ssid, const char* password*/) {
   // Configure the hostname
   uint16_t maxlen = strlen(nameprefix) + 7;
   char *fullhostname = new char[maxlen];
@@ -69,6 +69,7 @@ void setupOTA(const char* nameprefix, const char* ssid, const char* password) {
     #ifdef Serial_Debug
       Serial.println("\nEnd");
     #endif
+    ESP.restart();
   });
   
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {

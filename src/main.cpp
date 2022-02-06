@@ -38,13 +38,12 @@ PubSubClient MQTT_client(WiFi_client);
 char MqttCmdUrl[20];
 char MqttStateUrl[20];
 
-#define MaxMqttDataLen 4
-char MqttData[MaxMqttDataLen];
+char MqttData[4];
 bool NewCmd;                                            //New Command from broker
 
 void callback(char* topic, byte* payload, unsigned int length) {
   memset(MqttData,0,sizeof(MqttData));
-  for (int i=0;i<length;i++) {
+  for (int i=0;i<min(length, sizeof(MqttData));i++) {
     MqttData[i] = (char)payload[i];
     #ifdef Serial_Debug
       Serial.print(MqttData[i]);
@@ -58,15 +57,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 enum {  State_None = 0,     //0
-        State_Open,         //1
-        State_Opening,      //2
-        State_Close,        //3
+        State_Close,        //1
+        State_Open,         //2
+        State_Stop,         //3
         State_Closing,      //4
-        State_Obstacle,     //5
-        State_Jammed,       //6
-        State_ProbeProblem, //7
-        State_Stopped,      //8
-        State_AnyPosition   //9
+        State_Opening,      //5
+        State_Obstacle,     //6
+        State_Jammed,       //7
+        State_ProbeProblem, //8
+        State_AnyPosition,  //9
+        State_Reset         //10
       };
 unsigned long MQTT_AliveTimer;
 
@@ -76,7 +76,7 @@ volatile uint8_t Statemachine;
 char EGC_MQTT_CmdData;
 int32_t MQTT_State;
 int32_t MQTT_StateOld;
-int32_t Position_State;
+int32_t Position_State = State_Close;
 uint8_t Command;
 uint8_t CommandOld;
 unsigned long Main_SaveTime;
@@ -89,6 +89,20 @@ bool blink;
 void CheckCredentials();
 void MQTT_connect();
 void Wifi_Reconnect();
+
+void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info){
+  #ifdef Serial_Debug
+    Serial.println("Disconnected from WiFi access point");
+    Serial.print("WiFi lost connection. Reason: ");
+    Serial.println(info.disconnected.reason);
+    Serial.println("Trying to Reconnect");
+  #endif
+  WiFi.disconnect(true);
+  const char* ssid_event  = Manager.Credentials["WIFI_SSID"];
+  const char* pw_event    = Manager.Credentials["WIFI_PW"];
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid_event, pw_event);
+}
 
 void IRAM_ATTR PProbe_ISR() { 
   detachInterrupt(PProbe_In);                           //Denied interrupt of Photoprobe
@@ -104,9 +118,7 @@ void setup() {
 
   CheckCredentials();
 
-  setupOTA( Manager.Credentials["NAME"], 
-            Manager.Credentials["WIFI_SSID"], 
-            Manager.Credentials["WIFI_PW"]);
+  setupOTA( Manager.Credentials["NAME"]);
 
   pinMode(PProbe_In,INPUT_PULLUP);                      //Photo Probe
   pinMode(IProbe_In,INPUT);                             //Inductive Probe
@@ -119,29 +131,36 @@ void setup() {
 
 void loop() {
 
-  Wifi_Reconnect();  
   MQTT_connect();
 
   MQTT_client.loop();
 
   if (NewCmd) {
     EGC_MQTT_CmdData = atoi(MqttData);
-    if (EGC_MQTT_CmdData == 2) {                                //Command opening gate
-      Command = 2;
+    if (EGC_MQTT_CmdData == State_Open) {                                //Command opening gate
+      Command = State_Open;
       #ifdef Serial_Debug
         Serial.println("Open");
       #endif
-    }else if (EGC_MQTT_CmdData == 1) {                          //Command closing gate
-      Command = 1;
+    }else if (EGC_MQTT_CmdData == State_Close) {                          //Command closing gate
+      Command = State_Close;
       #ifdef Serial_Debug
         Serial.println("Close");
       #endif
-    }else if (EGC_MQTT_CmdData == 3) {                          //Fast Stop
-      Command = 3;
+    }else if (EGC_MQTT_CmdData == State_Stop) {                          //Fast Stop
+      Command = State_Stop;
       //detachInterrupt(PProbe_In);                               //Denied interrupt of Photoprobe
       EGC_Drive.Stop();
       #ifdef Serial_Debug
         Serial.println("Stop");
+      #endif
+    }else if (EGC_MQTT_CmdData == State_Reset) {                          //Reset
+      Command = State_None;
+      //detachInterrupt(PProbe_In);                               //Denied interrupt of Photoprobe
+      EGC_Drive.Stop();
+      Position_State = State_None;
+      #ifdef Serial_Debug
+        Serial.println("Reset");
       #endif
     }else {
       NewCmd  = false;
@@ -156,12 +175,12 @@ void loop() {
         #endif
         //detachInterrupt(PProbe_In);                             //Denied interrupt of Photoprobe
         EGC_Drive.Stop();                                       //First start first stop
-        if (Main_DifTime >10000) {                              //After 10s first cmd allowed
+        if (Main_DifTime >10000UL) {                              //After 10s first cmd allowed
           CommandOld    = 0;
           Main_SaveTime = millis();
           FirstRun      = false;
           #ifdef Serial_Debug
-            Serial.print("M15:");Serial.println(millis());
+            Serial.print("M15:");Serial.println(Main_Time);
           #endif
         }
       }else if((Statemachine > 1) && (CommandOld != Command)) { //Drive is still moveing and has to be stopped first
@@ -183,13 +202,14 @@ void loop() {
     }
   }
 
-  Main_DifTime = abs(millis() - Main_SaveTime);
+  unsigned long Main_Time = millis();
+  Main_DifTime = Main_Time - Main_SaveTime;
 
   switch (Statemachine) {
   case 0://First Start or drive was jammed
     if (!FirstRun) {
       #ifdef Serial_Debug
-        Serial.print("M1:");Serial.println(millis());
+        Serial.print("M1:");Serial.println(Main_Time);
       #endif
       Statemachine = 1;
     }
@@ -198,22 +218,22 @@ void loop() {
   case 1://Waiting
     if (CommandOld != Command) {
       CommandOld = Command;
-      if (Command == 2) {
+      if ((Command == State_Open)&&(Position_State != State_Open)) {
         MQTT_State    = State_Opening;
         Statemachine  = 2;
         #ifdef Serial_Debug
-          Serial.print("M2:");Serial.println(millis());
+          Serial.print("M2:");Serial.println(Main_Time);
         #endif
-      }else if (Command == 1) {
+      }else if ((Command == State_Close)&&(Position_State != State_Close)) {
         MQTT_State    = State_Closing;
         Statemachine  = 3;
         #ifdef Serial_Debug
-          Serial.print("M3:");Serial.println(millis());
+          Serial.print("M3:");Serial.println(Main_Time);
         #endif
-      }else if (Command == 3) {
-        MQTT_State    = State_Stopped;
+      }else if (Command == State_Stop) {
+        MQTT_State    = State_Stop;
         #ifdef Serial_Debug
-          Serial.print("M15:");Serial.println(millis());
+          Serial.print("M15:");Serial.println(Main_Time);
         #endif
       }
     }
@@ -223,16 +243,16 @@ void loop() {
     if (EGC_Drive.Move(Drive_Open)) {
       if (digitalRead(IProbe_In)) {
         #ifdef Serial_Debug
-          Serial.print("M4:");Serial.println(millis());
+          Serial.print("M4:");Serial.println(Main_Time);
         #endif
         Statemachine = 10;  //Drive stands on endstop -> Waiting for moveing and leaving endstop
       }else {
         #ifdef Serial_Debug
-          Serial.print("M5:");Serial.println(millis());
+          Serial.print("M5:");Serial.println(Main_Time);
         #endif
         Statemachine = 20;  ///Drive stands anywhere -> Waiting for moveing
       }
-      Main_SaveTime  = millis();
+      Main_SaveTime  = Main_Time;
     }
     break;
 
@@ -240,16 +260,16 @@ void loop() {
     if (EGC_Drive.Move(Drive_Close)) {
       if (digitalRead(IProbe_In)) {
         #ifdef Serial_Debug
-          Serial.print("M6:");Serial.println(millis());
+          Serial.print("M6:");Serial.println(Main_Time);
         #endif
         Statemachine = 10;  //Drive stands on endstop -> Waiting for moveing and leaving endstop
       }else {
         #ifdef Serial_Debug
-          Serial.print("M7:");Serial.println(millis());
+          Serial.print("M7:");Serial.println(Main_Time);
         #endif
         Statemachine = 20;  ///Drive stands anywhere -> Waiting for moveing
       }
-      Main_SaveTime  = millis();
+      Main_SaveTime  = Main_Time;
     }
     break;
 
@@ -257,7 +277,7 @@ void loop() {
     //attachInterrupt(PProbe_In,PProbe_ISR, RISING);  //Allow interrupt of Photoprobe
     if (Moving && !digitalRead(IProbe_In)) {
       #ifdef Serial_Debug
-        Serial.print("M8:");Serial.println(millis());
+        Serial.print("M8:");Serial.println(Main_Time);
       #endif
       Statemachine = 30;
     }else if (Main_DifTime > Main_StartTime) {
@@ -267,7 +287,7 @@ void loop() {
         MQTT_State    = State_Jammed;       //Drive did not move
       }
       #ifdef Serial_Debug
-        Serial.print("M9:");Serial.println(millis());
+        Serial.print("M9:");Serial.println(Main_Time);
       #endif
       Statemachine  = 1;
       //detachInterrupt(PProbe_In);                       //Denied interrupt of Photoprobe
@@ -279,13 +299,13 @@ void loop() {
     //attachInterrupt(PProbe_In,PProbe_ISR, RISING);  //Allow interrupt of Photoprobe
     if (Moving) {
       #ifdef Serial_Debug
-        Serial.print("M10:");Serial.println(millis());
+        Serial.print("M10:");Serial.println(Main_Time);
       #endif
       Statemachine = 30;
     }else if (Main_DifTime > Main_StartTime) {
       MQTT_State    = State_Jammed;         //Drive did not move
       #ifdef Serial_Debug
-        Serial.print("M11:");Serial.println(millis());
+        Serial.print("M11:");Serial.println(Main_Time);
       #endif
       Statemachine  = 1;
       //detachInterrupt(PProbe_In);                       //Denied interrupt of Photoprobe
@@ -297,15 +317,15 @@ void loop() {
     if (digitalRead(IProbe_In)) {
       //detachInterrupt(PProbe_In);                       //Denied interrupt of Photoprobe
       EGC_Drive.Stop();
-      if (Command == 2) {
+      if (Command == State_Open) {
         MQTT_State      = State_Open;       //Gate open
         Position_State  = State_Open;       //Save state: Gate open
-      }else if (Command == 1) {
+      }else if (Command == State_Close) {
         MQTT_State      = State_Close;      //Gate close
         Position_State  = State_Close;      //Save state: Gate close
       }
       #ifdef Serial_Debug
-        Serial.print("M12:");Serial.println(millis());
+        Serial.print("M12:");Serial.println(Main_Time);
       #endif
       Statemachine  = 1;
     }
@@ -321,7 +341,7 @@ void loop() {
           CommandOld = 0;                                             //Obstacle away -> Start again
         }
         #ifdef Serial_Debug
-          Serial.print("M13:");Serial.println(millis());
+          Serial.print("M13:");Serial.println(Main_Time);
         #endif
         if (FirstRun) {
           Statemachine  = 0;
@@ -338,24 +358,17 @@ void loop() {
     break;
   }
 
-  long Publish_DifTime = millis() - MQTT_AliveTimer;                  //Calculate Dif Timer
-  if (Publish_DifTime < 0)                                            //Overflow detection
-  {
-    MQTT_AliveTimer = 0;
-    Publish_DifTime = 0;
-  }
-  
-  if (Publish_DifTime > 999){                 //delay of 1s reached
+  if (Main_Time - MQTT_AliveTimer > 999UL){                 //delay of 1s reached
     blink         = !blink;
     digitalWrite(3,blink);
-    MQTT_AliveTimer = millis();
+    MQTT_AliveTimer = Main_Time;
     if (MQTT_State != MQTT_StateOld){         //New State 
       MQTT_StateOld = MQTT_State;
       char payloadPublish[4];
       itoa(MQTT_State, payloadPublish, 10);
       if (MQTT_client.publish(MqttStateUrl,payloadPublish)){
         #ifdef Serial_Debug
-          Serial.print(payloadPublish);Serial.print(" on: ");Serial.print(MqttStateUrl);Serial.println(millis());
+          Serial.print(payloadPublish);Serial.print(" on: ");Serial.print(MqttStateUrl);Serial.println(Main_Time);
         #endif
       }else {
         #ifdef Serial_Debug
@@ -385,9 +398,13 @@ void CheckCredentials() {
     const char* mqttid      = Manager.Credentials["MQTT_ID"];
     const char* mqttpw      = Manager.Credentials["MQTT_PW"];
     
+    WiFi.onEvent(WiFiStationDisconnected, SYSTEM_EVENT_STA_DISCONNECTED);
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, pw);
-    unsigned long StartTime = millis();
+
+
+    unsigned long CC_StartTime = millis();
+    unsigned long CC_Time = millis();
 
     while ((WiFi.status() != WL_CONNECTED) && !StartServer) {         //Attempt to connect with Wifi
       if ((WiFi.status() == WL_NO_SSID_AVAIL)
@@ -397,7 +414,8 @@ void CheckCredentials() {
         #endif
         StartServer = true;
       }
-      if ((millis()-StartTime) > 120000)                               //After 120s -> Start Server
+      CC_Time = millis();
+      if ((CC_Time-CC_StartTime) > 120000UL)                               //After 120s -> Start Server
       {
         #ifdef Serial_Debug
             Serial.println("Connection Failed! Start Server");
@@ -411,7 +429,6 @@ void CheckCredentials() {
 
       uint8_t retries   = 1;
       while (!MQTT_client.connected() && !StartServer) {
-        StartTime = millis();
         if (MQTT_client.connect(ctrlname,mqttid,mqttpw,0,1,0,0,1)) {  //Attempt to connect
           #ifdef Serial_Debug
             Serial.println("connected");
@@ -439,9 +456,7 @@ void CheckCredentials() {
           #endif
           StartServer          = true;
         }else {
-          while ((millis()-StartTime)<5000){
-            //Wait up to 5s
-          }
+          delay(5000);
         }
       }
     }
@@ -455,12 +470,12 @@ void CheckCredentials() {
 // Function to connect and reconnect as necessary to the MQTT server or even AP
 // Is called in the loop function and it will take care if connecting.
 void MQTT_connect() {
-  if (WiFi.status() != WL_CONNECTED){ //Return if not connected to WiFi
+  /*if (WiFi.status() != WL_CONNECTED){ //Return if not connected to WiFi
     MQTT_client.disconnect();
     return;
-  }
+  }Nicht nutzen. uC kommt hier richtig ins Schleudern*/
 
-  if (MQTT_client.connected()) {             //Return if already connected.
+  if (MQTT_client.state() == MQTT_CONNECTED) {             //Return if already connected.
     return;
   }
 
@@ -469,78 +484,43 @@ void MQTT_connect() {
   #endif
   uint8_t retries   = 1;
   while (!MQTT_client.connected()) {
-      // Attempt to connect
-      if (MQTT_client.connect(Manager.Credentials["NAME"],Manager.Credentials["MQTT_ID"],Manager.Credentials["MQTT_PW"],0,1,0,0,1)) {
-          //Subscribe: Cmd Topic
-          MQTT_client.subscribe(MqttCmdUrl);
-          //Publish: State Topic
-          char payloadPublish[4];
-          itoa(State_None, payloadPublish, 10);
-          MQTT_client.publish(MqttStateUrl,payloadPublish);
-        #ifdef Serial_Debug
-          Serial.println("connected");
-        #endif
-      } else {
-        #ifdef Serial_Debug
-          Serial.print("failed, rc=");
-          Serial.print(MQTT_client.state());
-        #endif
-        retries++;
-      }
+    // Attempt to connect
+    if (MQTT_client.connect(Manager.Credentials["NAME"],Manager.Credentials["MQTT_ID"],Manager.Credentials["MQTT_PW"],0,1,0,0,1)) {
+        //Subscribe: Cmd Topic
+        MQTT_client.subscribe(MqttCmdUrl);
+        //Publish: State Topic
+        char payloadPublish[4];
+        itoa(Command, payloadPublish, 10);
+        MQTT_client.publish(MqttStateUrl,payloadPublish);
+      #ifdef Serial_Debug
+        Serial.println("connected");
+      #endif
+    } else {
+      #ifdef Serial_Debug
+        Serial.print("failed, rc=");
+        Serial.print(MQTT_client.state());
+      #endif
+      retries++;
+    }
 
-      if (retries > 3)
-      {
-        #ifdef Serial_Debug
-          Serial.println("Can not connect to mqtt broker!");
-        #endif
-        if (WiFi.status() != WL_CONNECTED) {
-          MQTT_client.disconnect();
-          return;
-        }
+    if (retries > 3)
+    {
+      #ifdef Serial_Debug
+        Serial.println("Can not connect to mqtt broker!");
+      #endif
+      if (WiFi.status() != WL_CONNECTED) {
+        return;
       }
+    }
+    delay(3000);
   }
   
   Statemachine  = 0;
   FirstRun      = true;
   Main_SaveTime = millis();
   Main_DifTime  = 0;
+  CommandOld    = Command;
   #ifdef Serial_Debug
     Serial.println("MQTT Connected!");
-  #endif
-}
-
-void Wifi_Reconnect() {
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    return;
-  }
-
-  bool Reconnecting = false;
-  uint8_t retries = 0;
-
-  while ((WiFi.status() != WL_CONNECTED)) {
-    if (!Reconnecting) {
-      Reconnecting = true;
-      WiFi.reconnect();
-      #ifdef Serial_Debug
-        Serial.print("Reconnecting to WiFi...");
-      #endif
-    }
-    #ifdef Serial_Debug
-      Serial.print(".");
-    #endif
-    delay(500);
-    if (retries >= 60) {
-      //ESP failed to connect to WIFI. -> Restart ESP
-      ESP.restart();
-    }
-    retries++;
-  }
-  Statemachine  = 0;
-  FirstRun      = true;
-  Main_SaveTime = millis();
-  Main_DifTime  = 0;
-  #ifdef Serial_Debug
-    Serial.println("WiFi Connected!");
   #endif
 }

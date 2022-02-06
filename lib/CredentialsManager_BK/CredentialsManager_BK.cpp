@@ -22,12 +22,14 @@ void onWsEvent(AsyncWebSocket * server, AsyncWebSocketClient * client, AwsEventT
  
    } else if(type == WS_EVT_DATA){
       memset(data_rx, 0, sizeof(data_rx));
-      for (size_t i = 0; i < len; i++)
-      {
+      for (size_t i = 0; i < len; i++) {
          data_rx[i] = data[i];
          #ifdef Serial_Debug 
             Serial.print(data_rx[i]);
          #endif
+      }
+      if (strcmp("res",data_rx) == 0) {
+         ESP.restart();
       }
 
       NewDataReady = true;

@@ -37,10 +37,18 @@
     <input type="text" id="MQTT_ID" maxlength="32"><br>
     <label>MQTT Broker PW:</label><br>
     <input type="password" id="MQTT_PW" maxlength="64"><br><br>
-    <button type="button" id="SUBMIT">Submit</button>
+    <button type="button" id="SUBMIT">Submit</button><button type="button" id="RESTART">Restart Controller</button>
     <p id="info">Waiting for submit</p>
 
     <script>
+        document.getElementById("RESTART").onclick = function() {
+            document.getElementById("SUBMIT").disabled = false;
+            ws = new WebSocket("ws://" + location.host + "/paraex");
+            ws.onopen = function(){
+                ws.send("res");
+            };
+        };
+        
         document.getElementById("SUBMIT").onclick = function() {
             if ((document.getElementById("NAME").value == "")
             || (document.getElementById("WIFI_SSID").value == "")
