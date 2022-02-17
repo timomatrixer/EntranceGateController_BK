@@ -87,6 +87,7 @@ bool Moving;                                            //Status Drive is moving
 bool blink;
 
 void CheckCredentials();
+void MQTT_setup();
 void MQTT_connect();
 void Wifi_Reconnect();
 
@@ -112,8 +113,7 @@ void IRAM_ATTR PProbe_ISR() {
 
 void setup() {
   #ifdef Serial_Debug
-    Serial.begin(115200);
-    delay(10);
+    Serial.begin(4800);//115200);
   #endif
 
   CheckCredentials();
@@ -132,7 +132,7 @@ void setup() {
 void loop() {
 
   MQTT_connect();
-
+  
   MQTT_client.loop();
 
   if (NewCmd) {
@@ -180,7 +180,7 @@ void loop() {
           Main_SaveTime = millis();
           FirstRun      = false;
           #ifdef Serial_Debug
-            Serial.print("M15:");Serial.println(Main_Time);
+            Serial.print("M15:");Serial.println(millis());
           #endif
         }
       }else if((Statemachine > 1) && (CommandOld != Command)) { //Drive is still moveing and has to be stopped first
@@ -358,11 +358,12 @@ void loop() {
     break;
   }
 
-  if (Main_Time - MQTT_AliveTimer > 999UL){                 //delay of 1s reached
+  if ((Main_Time - MQTT_AliveTimer > 999UL)
+  || ((Main_Time - MQTT_AliveTimer > 999UL) && (MQTT_State != MQTT_StateOld))){                 //delay of 1s reached
     blink         = !blink;
     digitalWrite(3,blink);
     MQTT_AliveTimer = Main_Time;
-    if (MQTT_State != MQTT_StateOld){         //New State 
+    //if (MQTT_State != MQTT_StateOld){         //New State 
       MQTT_StateOld = MQTT_State;
       char payloadPublish[4];
       itoa(MQTT_State, payloadPublish, 10);
@@ -375,7 +376,7 @@ void loop() {
           Serial.println("Publish fail!");
         #endif
       }
-    }
+    //}
   }
 }
 
@@ -393,8 +394,6 @@ void CheckCredentials() {
     const char* ctrlname    = Manager.Credentials["NAME"];
     const char* ssid        = Manager.Credentials["WIFI_SSID"];
     const char* pw          = Manager.Credentials["WIFI_PW"];
-    const char* mqttip      = Manager.Credentials["MQTT_IP"];
-    const uint16_t mqttport = Manager.Credentials["MQTT_PORT"];
     const char* mqttid      = Manager.Credentials["MQTT_ID"];
     const char* mqttpw      = Manager.Credentials["MQTT_PW"];
     
@@ -424,8 +423,7 @@ void CheckCredentials() {
       }
     }
     if (!StartServer) {
-      MQTT_client.setServer(mqttip, mqttport);
-      MQTT_client.setCallback(callback);
+      MQTT_setup();
 
       uint8_t retries   = 1;
       while (!MQTT_client.connected() && !StartServer) {
@@ -455,8 +453,6 @@ void CheckCredentials() {
             Serial.println("Can not connect to mqtt broker!");
           #endif
           StartServer          = true;
-        }else {
-          delay(5000);
         }
       }
     }
@@ -467,14 +463,17 @@ void CheckCredentials() {
   }
 }
 
-// Function to connect and reconnect as necessary to the MQTT server or even AP
+void MQTT_setup(){
+  const char* mqttip      = Manager.Credentials["MQTT_IP"];
+  const uint16_t mqttport = Manager.Credentials["MQTT_PORT"];
+  MQTT_client.setServer(mqttip, mqttport);
+  MQTT_client.setKeepAlive(43200);//alle 12h
+  MQTT_client.setCallback(callback);
+}
+
+// Function to connect and reconnect as necessary to the MQTT server
 // Is called in the loop function and it will take care if connecting.
 void MQTT_connect() {
-  /*if (WiFi.status() != WL_CONNECTED){ //Return if not connected to WiFi
-    MQTT_client.disconnect();
-    return;
-  }Nicht nutzen. uC kommt hier richtig ins Schleudern*/
-
   if (MQTT_client.state() == MQTT_CONNECTED) {             //Return if already connected.
     return;
   }
@@ -482,6 +481,8 @@ void MQTT_connect() {
   #ifdef Serial_Debug
     Serial.print("Connecting to MQTT... ");
   #endif
+
+  MQTT_setup();
   uint8_t retries   = 1;
   while (!MQTT_client.connected()) {
     // Attempt to connect
@@ -512,7 +513,6 @@ void MQTT_connect() {
         return;
       }
     }
-    delay(3000);
   }
   
   Statemachine  = 0;
