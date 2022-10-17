@@ -73,7 +73,7 @@ unsigned long MQTT_AliveTimer;
 /*************************** Sketch Code ************************************/
 
 volatile uint8_t Statemachine;
-char EGC_MQTT_CmdData;
+char MQTT_CmdData;
 int32_t MQTT_State;
 int32_t MQTT_StateOld;
 int32_t Position_State = State_Close;
@@ -136,25 +136,25 @@ void loop() {
   MQTT_client.loop();
 
   if (NewCmd) {
-    EGC_MQTT_CmdData = atoi(MqttData);
-    if (EGC_MQTT_CmdData == State_Open) {                                //Command opening gate
+    MQTT_CmdData = atoi(MqttData);
+    if (MQTT_CmdData == State_Open) {                                //Command opening gate
       Command = State_Open;
       #ifdef Serial_Debug
         Serial.println("Open");
       #endif
-    }else if (EGC_MQTT_CmdData == State_Close) {                          //Command closing gate
+    }else if (MQTT_CmdData == State_Close) {                          //Command closing gate
       Command = State_Close;
       #ifdef Serial_Debug
         Serial.println("Close");
       #endif
-    }else if (EGC_MQTT_CmdData == State_Stop) {                          //Fast Stop
+    }else if (MQTT_CmdData == State_Stop) {                          //Fast Stop
       Command = State_Stop;
       //detachInterrupt(PProbe_In);                               //Denied interrupt of Photoprobe
       EGC_Drive.Stop();
       #ifdef Serial_Debug
         Serial.println("Stop");
       #endif
-    }else if (EGC_MQTT_CmdData == State_Reset) {                          //Reset
+    }else if (MQTT_CmdData == State_Reset) {                          //Reset
       Command = State_None;
       //detachInterrupt(PProbe_In);                               //Denied interrupt of Photoprobe
       EGC_Drive.Stop();
@@ -191,7 +191,7 @@ void loop() {
     }
   }
   
-  Moving = EGC_Hall.StateChange(Main_StartTime);  
+  Moving = /*true;*/EGC_Hall.StateChange(Main_StartTime);  
   if (Moving) {
     if (!digitalRead(IProbe_In)) {
       Position_State  = State_AnyPosition;            //Gate position is anywhere between endstops
@@ -359,7 +359,7 @@ void loop() {
   }
 
   if ((Main_Time - MQTT_AliveTimer > 999UL)
-  || ((Main_Time - MQTT_AliveTimer > 999UL) && (MQTT_State != MQTT_StateOld))){                 //delay of 1s reached
+  /*|| ((Main_Time - MQTT_AliveTimer > 999UL) && (MQTT_State != MQTT_StateOld))*/){                 //delay of 1s reached
     blink         = !blink;
     digitalWrite(3,blink);
     MQTT_AliveTimer = Main_Time;
@@ -381,12 +381,12 @@ void loop() {
 }
 
 void CheckCredentials() {
-  if (touchRead(12) < 40) {
-    #ifdef Serial_Debug
-        Serial.println("TouchPad while uC start! Start Server");
-    #endif
-    Manager.begin();
-  }
+  //if (touchRead(12) < 40) {
+  //  #ifdef Serial_Debug
+  //      Serial.println("TouchPad while uC start! Start Server");
+  //  #endif
+  //  Manager.begin();
+  //}
   
   if (Manager.readData()) {
     bool StartServer        = false;
@@ -397,7 +397,7 @@ void CheckCredentials() {
     const char* mqttid      = Manager.Credentials["MQTT_ID"];
     const char* mqttpw      = Manager.Credentials["MQTT_PW"];
     
-    WiFi.onEvent(WiFiStationDisconnected, SYSTEM_EVENT_STA_DISCONNECTED);
+    WiFi.onEvent(WiFiStationDisconnected, SYSTEM_EVENT_STA_DISCONNECTED/*ARDUINO_EVENT_WIFI_STA_DISCONNECTED*/);
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, pw);
 
@@ -414,11 +414,12 @@ void CheckCredentials() {
         StartServer = true;
       }
       CC_Time = millis();
-      if ((CC_Time-CC_StartTime) > 120000UL)                               //After 120s -> Start Server
+      if ((CC_Time-CC_StartTime) > 240000UL)                               //After 240s -> Start Server
       {
         #ifdef Serial_Debug
             Serial.println("Connection Failed! Start Server");
         #endif
+        //ESP.restart();
         StartServer = true;
       }
     }
@@ -452,6 +453,7 @@ void CheckCredentials() {
           #ifdef Serial_Debug
             Serial.println("Can not connect to mqtt broker!");
           #endif
+          //ESP.restart();
           StartServer          = true;
         }
       }

@@ -110,9 +110,11 @@ void CMBK::begin(){
 
    bool WifiCredentialsOk = false;
    bool MQTTCredentialsOk = false;
+   unsigned long NoInteractionTimer = millis();
 
    while (!WifiCredentialsOk || !MQTTCredentialsOk){
       if (NewDataReady) {
+         NoInteractionTimer= millis();
          NewDataReady      = false;
          WifiCredentialsOk = false;
          MQTTCredentialsOk = false;
@@ -208,6 +210,12 @@ void CMBK::begin(){
                }
             }
          }
+      }
+      if ((millis()-NoInteractionTimer) > 600000) {   // AFter 10min of no interaction -> ESP restart
+         #ifdef Serial_Debug
+            Serial.println("Interaction timeout!");
+         #endif
+         ESP.restart();
       }
    }
    BKws.textAll("ok");           //Credentials ok

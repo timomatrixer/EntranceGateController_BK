@@ -11,7 +11,7 @@ void Hall::begin(int8_t Pin)
 }
 
 bool Hall::StateChange(unsigned long SC_Timeout){
-    SC_DifTime = abs(millis()-SC_StartTime);
+    SC_DifTime = millis()-SC_StartTime;
     switch (SC_BestCase)
     {
     case 0:

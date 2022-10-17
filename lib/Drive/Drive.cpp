@@ -15,7 +15,7 @@ void Drive::begin(bool Invert, int8_t ComPin, int8_t LPin)
 }
 
 bool Drive::Move(bool Direction){
-    DifTime = abs(millis() - StartTime);
+    DifTime = millis() - StartTime;
     switch (MoveState)
     {
     case 0://Check actual operation
