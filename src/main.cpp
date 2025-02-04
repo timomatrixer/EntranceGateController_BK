@@ -11,6 +11,7 @@
 #include "Hall.h"
 #include "Drive.h"
 #include "OTA.h"
+#include <TelnetStream.h>
 
 /************************* Controller Setup *********************************/
 #define PProbe_In         14    //Photo Probe pin (obstacle detection)
@@ -45,13 +46,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
   memset(MqttData,0,sizeof(MqttData));
   for (int i=0;i<min(length, sizeof(MqttData));i++) {
     MqttData[i] = (char)payload[i];
-    #ifdef Serial_Debug
-      Serial.print(MqttData[i]);
+    #ifdef TelnetStream_Debug
+      TelnetStream.print(MqttData[i]);
     #endif
   }
-  #ifdef Serial_Debug
-    Serial.print(" <- Message arrived from ");
-    Serial.println(topic);
+  #ifdef TelnetStream_Debug
+    TelnetStream.print(" <- Message arrived from ");
+    TelnetStream.println(topic);
   #endif
   NewCmd  = true;
 }
@@ -79,17 +80,23 @@ int32_t MQTT_StateOld;
 int32_t Position_State = State_Close;
 uint8_t Command;
 uint8_t CommandOld;
-unsigned long Main_SaveTime;
-long Main_DifTime;
 uint8_t ctObstacle;                                     //Counter for Photo_Probe filtering
 bool FirstRun = true;                                   //Controller just started and will get first cmd
 bool Moving;                                            //Status Drive is moving
 bool blink;
+uint8_t ctAliveOnTelnet;
+unsigned long     Main_SaveTime;
+long              Main_DifTime;
+unsigned long     Main_Time;
+byte              Main_Hour;
+byte              Main_Minute;
+byte              Main_Second;
 
 void CheckCredentials();
 void MQTT_setup();
 void MQTT_connect();
 void Wifi_Reconnect();
+void Telnet_Input();
 
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info){
   #ifdef Serial_Debug
@@ -130,6 +137,7 @@ void setup() {
 }
 
 void loop() {
+  Telnet_Input();
 
   MQTT_connect();
   
@@ -139,28 +147,28 @@ void loop() {
     MQTT_CmdData = atoi(MqttData);
     if (MQTT_CmdData == State_Open) {                                //Command opening gate
       Command = State_Open;
-      #ifdef Serial_Debug
-        Serial.println("Open");
+      #ifdef TelnetStream_Debug
+        TelnetStream.println("Open");
       #endif
     }else if (MQTT_CmdData == State_Close) {                          //Command closing gate
       Command = State_Close;
-      #ifdef Serial_Debug
-        Serial.println("Close");
+      #ifdef TelnetStream_Debug
+        TelnetStream.println("Close");
       #endif
     }else if (MQTT_CmdData == State_Stop) {                          //Fast Stop
       Command = State_Stop;
       //detachInterrupt(PProbe_In);                               //Denied interrupt of Photoprobe
       EGC_Drive.Stop();
-      #ifdef Serial_Debug
-        Serial.println("Stop");
+      #ifdef TelnetStream_Debug
+        TelnetStream.println("Stop");
       #endif
     }else if (MQTT_CmdData == State_Reset) {                          //Reset
       Command = State_None;
       //detachInterrupt(PProbe_In);                               //Denied interrupt of Photoprobe
       EGC_Drive.Stop();
       Position_State = State_None;
-      #ifdef Serial_Debug
-        Serial.println("Reset");
+      #ifdef TelnetStream_Debug
+        TelnetStream.println("Reset");
       #endif
     }else {
       NewCmd  = false;
@@ -170,8 +178,8 @@ void loop() {
       NewCmd  = false;
       if (FirstRun) {                                           //Controller just started
         CommandOld    = Command;
-        #ifdef Serial_Debug
-          Serial.print("M0:");Serial.println(Main_DifTime);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M0:");TelnetStream.println(Main_DifTime);
         #endif
         //detachInterrupt(PProbe_In);                             //Denied interrupt of Photoprobe
         EGC_Drive.Stop();                                       //First start first stop
@@ -179,8 +187,8 @@ void loop() {
           CommandOld    = 0;
           Main_SaveTime = millis();
           FirstRun      = false;
-          #ifdef Serial_Debug
-            Serial.print("M15:");Serial.println(millis());
+          #ifdef TelnetStream_Debug
+            TelnetStream.print("M15:");TelnetStream.println(millis());
           #endif
         }
       }else if((Statemachine > 1) && (CommandOld != Command)) { //Drive is still moveing and has to be stopped first
@@ -191,25 +199,22 @@ void loop() {
     }
   }
   
-  Moving = /*true;*/EGC_Hall.StateChange(Main_StartTime);  
+  Moving = /*true;*/EGC_Hall.StateChange(Main_StartTime);
   if (Moving) {
     if (!digitalRead(IProbe_In)) {
       Position_State  = State_AnyPosition;            //Gate position is anywhere between endstops
     }
-    if (digitalRead(PProbe_In)) {
-      EGC_Drive.Stop();
-      Statemachine = 90;                               //Obstacle
-    }
+    //if (digitalRead(PProbe_In)) {
+    //  EGC_Drive.Stop();
+    //  Statemachine = 90;                               //Obstacle
+    //}
   }
-
-  unsigned long Main_Time = millis();
-  Main_DifTime = Main_Time - Main_SaveTime;
 
   switch (Statemachine) {
   case 0://First Start or drive was jammed
     if (!FirstRun) {
-      #ifdef Serial_Debug
-        Serial.print("M1:");Serial.println(Main_Time);
+      #ifdef TelnetStream_Debug
+        TelnetStream.print("M1:");TelnetStream.println(Main_Time);
       #endif
       Statemachine = 1;
     }
@@ -221,19 +226,19 @@ void loop() {
       if ((Command == State_Open)&&(Position_State != State_Open)) {
         MQTT_State    = State_Opening;
         Statemachine  = 2;
-        #ifdef Serial_Debug
-          Serial.print("M2:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M2:");TelnetStream.println(Main_Time);
         #endif
       }else if ((Command == State_Close)&&(Position_State != State_Close)) {
         MQTT_State    = State_Closing;
         Statemachine  = 3;
-        #ifdef Serial_Debug
-          Serial.print("M3:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M3:");TelnetStream.println(Main_Time);
         #endif
       }else if (Command == State_Stop) {
         MQTT_State    = State_Stop;
-        #ifdef Serial_Debug
-          Serial.print("M15:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M15:");TelnetStream.println(Main_Time);
         #endif
       }
     }
@@ -242,13 +247,13 @@ void loop() {
   case 2://Opening
     if (EGC_Drive.Move(Drive_Open)) {
       if (digitalRead(IProbe_In)) {
-        #ifdef Serial_Debug
-          Serial.print("M4:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M4:");TelnetStream.println(Main_Time);
         #endif
         Statemachine = 10;  //Drive stands on endstop -> Waiting for moveing and leaving endstop
       }else {
-        #ifdef Serial_Debug
-          Serial.print("M5:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M5:");TelnetStream.println(Main_Time);
         #endif
         Statemachine = 20;  ///Drive stands anywhere -> Waiting for moveing
       }
@@ -259,13 +264,13 @@ void loop() {
   case 3://Closing
     if (EGC_Drive.Move(Drive_Close)) {
       if (digitalRead(IProbe_In)) {
-        #ifdef Serial_Debug
-          Serial.print("M6:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M6:");TelnetStream.println(Main_Time);
         #endif
         Statemachine = 10;  //Drive stands on endstop -> Waiting for moveing and leaving endstop
       }else {
-        #ifdef Serial_Debug
-          Serial.print("M7:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M7:");TelnetStream.println(Main_Time);
         #endif
         Statemachine = 20;  ///Drive stands anywhere -> Waiting for moveing
       }
@@ -276,8 +281,8 @@ void loop() {
   case 10://Start from Endstop
     //attachInterrupt(PProbe_In,PProbe_ISR, RISING);  //Allow interrupt of Photoprobe
     if (Moving && !digitalRead(IProbe_In)) {
-      #ifdef Serial_Debug
-        Serial.print("M8:");Serial.println(Main_Time);
+      #ifdef TelnetStream_Debug
+        TelnetStream.print("M8:");TelnetStream.println(Main_Time);
       #endif
       Statemachine = 30;
     }else if (Main_DifTime > Main_StartTime) {
@@ -286,8 +291,8 @@ void loop() {
       }else {
         MQTT_State    = State_Jammed;       //Drive did not move
       }
-      #ifdef Serial_Debug
-        Serial.print("M9:");Serial.println(Main_Time);
+      #ifdef TelnetStream_Debug
+        TelnetStream.print("M9:");TelnetStream.println(Main_Time);
       #endif
       Statemachine  = 1;
       //detachInterrupt(PProbe_In);                       //Denied interrupt of Photoprobe
@@ -298,14 +303,14 @@ void loop() {
   case 20://Start from anywhere
     //attachInterrupt(PProbe_In,PProbe_ISR, RISING);  //Allow interrupt of Photoprobe
     if (Moving) {
-      #ifdef Serial_Debug
-        Serial.print("M10:");Serial.println(Main_Time);
+      #ifdef TelnetStream_Debug
+        TelnetStream.print("M10:");TelnetStream.println(Main_Time);
       #endif
       Statemachine = 30;
     }else if (Main_DifTime > Main_StartTime) {
       MQTT_State    = State_Jammed;         //Drive did not move
-      #ifdef Serial_Debug
-        Serial.print("M11:");Serial.println(Main_Time);
+      #ifdef TelnetStream_Debug
+        TelnetStream.print("M11:");TelnetStream.println(Main_Time);
       #endif
       Statemachine  = 1;
       //detachInterrupt(PProbe_In);                       //Denied interrupt of Photoprobe
@@ -324,8 +329,8 @@ void loop() {
         MQTT_State      = State_Close;      //Gate close
         Position_State  = State_Close;      //Save state: Gate close
       }
-      #ifdef Serial_Debug
-        Serial.print("M12:");Serial.println(Main_Time);
+      #ifdef TelnetStream_Debug
+        TelnetStream.print("M12:");TelnetStream.println(Main_Time);
       #endif
       Statemachine  = 1;
     }
@@ -340,8 +345,8 @@ void loop() {
         if (Position_State == State_AnyPosition) {
           CommandOld = 0;                                             //Obstacle away -> Start again
         }
-        #ifdef Serial_Debug
-          Serial.print("M13:");Serial.println(Main_Time);
+        #ifdef TelnetStream_Debug
+          TelnetStream.print("M13:");TelnetStream.println(Main_Time);
         #endif
         if (FirstRun) {
           Statemachine  = 0;
@@ -368,12 +373,16 @@ void loop() {
       char payloadPublish[4];
       itoa(MQTT_State, payloadPublish, 10);
       if (MQTT_client.publish(MqttStateUrl,payloadPublish)){
-        #ifdef Serial_Debug
-          Serial.print(payloadPublish);Serial.print(" on: ");Serial.print(MqttStateUrl);Serial.println(Main_Time);
-        #endif
+        ctAliveOnTelnet++;
+        if (ctAliveOnTelnet >= 60){             //Every minute send Alive over Telnet
+          ctAliveOnTelnet = 0;
+          #ifdef TelnetStream_Debug
+            TelnetStream.print(payloadPublish);TelnetStream.print(" on: ");TelnetStream.print(MqttStateUrl);TelnetStream.println(Main_Time);
+          #endif
+        }
       }else {
-        #ifdef Serial_Debug
-          Serial.println("Publish fail!");
+        #ifdef TelnetStream_Debug
+          TelnetStream.println("Publish fail!");
         #endif
       }
     //}
@@ -423,14 +432,17 @@ void CheckCredentials() {
         StartServer = true;
       }
     }
+
+    TelnetStream.begin(23);
+
     if (!StartServer) {
       MQTT_setup();
 
       uint8_t retries   = 1;
       while (!MQTT_client.connected() && !StartServer) {
         if (MQTT_client.connect(ctrlname,mqttid,mqttpw,0,1,0,0,1)) {  //Attempt to connect
-          #ifdef Serial_Debug
-            Serial.println("connected");
+          #ifdef TelnetStream_Debug
+            TelnetStream.println("connected");
           #endif
           //Subscribe: Cmd Topic
           strcpy(MqttCmdUrl, ctrlname);
@@ -443,15 +455,15 @@ void CheckCredentials() {
           itoa(State_None, payloadPublish, 10);
           MQTT_client.publish(MqttStateUrl,payloadPublish);
         } else {                                                      //Fail
-          #ifdef Serial_Debug
-            Serial.print("failed, rc=");
-            Serial.print(MQTT_client.state());
+          #ifdef TelnetStream_Debug
+            TelnetStream.print("failed, rc=");
+            TelnetStream.print(MQTT_client.state());
           #endif
           retries++;
         }
         if (retries > 3) {                                            //After 3 attempts -> Start Server
-          #ifdef Serial_Debug
-            Serial.println("Can not connect to mqtt broker!");
+          #ifdef TelnetStream_Debug
+            TelnetStream.println("Can not connect to mqtt broker!");
           #endif
           //ESP.restart();
           StartServer          = true;
@@ -480,8 +492,8 @@ void MQTT_connect() {
     return;
   }
 
-  #ifdef Serial_Debug
-    Serial.print("Connecting to MQTT... ");
+  #ifdef TelnetStream_Debug
+    TelnetStream.print("Connecting to MQTT... ");
   #endif
 
   MQTT_setup();
@@ -495,21 +507,21 @@ void MQTT_connect() {
         char payloadPublish[4];
         itoa(Command, payloadPublish, 10);
         MQTT_client.publish(MqttStateUrl,payloadPublish);
-      #ifdef Serial_Debug
-        Serial.println("connected");
+      #ifdef TelnetStream_Debug
+        TelnetStream.println("connected");
       #endif
     } else {
-      #ifdef Serial_Debug
-        Serial.print("failed, rc=");
-        Serial.print(MQTT_client.state());
+      #ifdef TelnetStream_Debug
+        TelnetStream.print("failed, rc=");
+        TelnetStream.print(MQTT_client.state());
       #endif
       retries++;
     }
 
     if (retries > 3)
     {
-      #ifdef Serial_Debug
-        Serial.println("Can not connect to mqtt broker!");
+      #ifdef TelnetStream_Debug
+        TelnetStream.println("Can not connect to mqtt broker!");
       #endif
       if (WiFi.status() != WL_CONNECTED) {
         return;
@@ -522,7 +534,65 @@ void MQTT_connect() {
   Main_SaveTime = millis();
   Main_DifTime  = 0;
   CommandOld    = Command;
-  #ifdef Serial_Debug
-    Serial.println("MQTT Connected!");
+  #ifdef TelnetStream_Debug
+    TelnetStream.println("MQTT Connected!");
   #endif
+}
+
+void Telnet_Input(){
+  Main_Time = millis();
+  Main_DifTime = Main_Time - Main_SaveTime;
+  unsigned long Main_millis = Main_Time;
+  Main_Hour = (Main_millis / 3600000);
+  Main_millis -= (Main_Hour * 3600000);
+  Main_Minute = (Main_millis / 60000);
+  Main_millis -= (Main_Minute * 60000);
+  Main_Second = (Main_millis / 1000);
+
+/*Telnet input*/
+  switch (TelnetStream.read()) {
+    case 'i':
+      #ifdef TelnetStream_Debug
+        //const char* TelnetNameForShow    = Manager.Credentials["NAME"];
+        //TelnetStream.println(TelnetNameForShow);
+        TelnetStream.print("Time             : ");TelnetStream.print(Main_Hour);TelnetStream.print("h");TelnetStream.print(Main_Minute);TelnetStream.print("m");TelnetStream.print(Main_Second);TelnetStream.println("s");
+        TelnetStream.print("Last Cmd         : ");
+        switch (CommandOld){
+          case 0:   TelnetStream.println("None"); break;
+          case 1:   TelnetStream.println("Close"); break;
+          case 2:   TelnetStream.println("Open"); break;
+          case 3:   TelnetStream.println("Stop"); break;
+          case 10:  TelnetStream.println("Reset"); break;
+          default:  TelnetStream.println(CommandOld); break;
+        }
+        TelnetStream.print("State            : ");
+        switch (MQTT_State){
+          case 0:   TelnetStream.println("None"); break;
+          case 1:   TelnetStream.println("Close"); break;
+          case 2:   TelnetStream.println("Open"); break;
+          case 3:   TelnetStream.println("Stop"); break;
+          case 4:   TelnetStream.println("Closing"); break;
+          case 5:   TelnetStream.println("Opening"); break;
+          case 6:   TelnetStream.println("Obstacle"); break;
+          case 7:   TelnetStream.println("Jammed"); break;
+          case 8:   TelnetStream.println("ProbeProblem"); break;
+          case 9:   TelnetStream.println("AnyPosition"); break;
+          case 10:  TelnetStream.println("Reset"); break;
+          default:  TelnetStream.println(MQTT_State); break;
+        }
+        TelnetStream.print("Induc Probe State: ");TelnetStream.println(digitalRead(IProbe_In));
+        TelnetStream.print("Photo Probe State: ");TelnetStream.println(digitalRead(PProbe_In));
+        TelnetStream.print("Relay Com State  : ");TelnetStream.println(digitalRead(17));
+        TelnetStream.print("Relay L State    : ");TelnetStream.println(digitalRead(16));
+      #endif
+      break;
+    case 'R':
+      TelnetStream.stop();
+      delay(100);
+      ESP.restart();
+      break;
+      
+    default:
+    break;
+  }
 }
